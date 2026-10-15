@@ -1,0 +1,68 @@
+name: Build MacBook M1 (VST3 + AU + Standalone App)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build-mac-m1:
+    runs-on: macos-14
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake & Fetch JUCE 8.0.4 (Apple Silicon M1 Universal)
+        run: |
+          if [ -f "CMakeLists.txt" ]; then
+            SRC_DIR="."
+          elif [ -f "KonosSampler/CMakeLists.txt" ]; then
+            SRC_DIR="KonosSampler"
+          else
+            echo "CMakeLists.txt not found!" && exit 1
+          fi
+          cmake -S "$SRC_DIR" -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="11.0" \
+            -DKONOS_BUILD_JUCE_PLUGIN=ON \
+            -DKONOS_FETCH_JUCE=ON
+
+      - name: Compile MacBook M1 VST3, Audio Unit (AU) & Standalone App
+        run: |
+          cmake --build build --config Release --parallel
+
+      - name: Ad-Hoc Sign & Package MacBook M1 Installer Bundle
+        run: |
+          mkdir -p dist_mac
+          cp -R "build/KonosSampler_artefacts/Release/VST3/Konos Sampler.vst3" "dist_mac/Konos Sampler.vst3"
+          cp -R "build/KonosSampler_artefacts/Release/AU/Konos Sampler.component" "dist_mac/Konos Sampler.component"
+          cp -R "build/KonosSampler_artefacts/Release/Standalone/Konos Sampler.app" "dist_mac/Konos Sampler.app"
+
+          # Ad-hoc sign for Apple Silicon M1 (arm64) execution
+          codesign --force --deep --sign - "dist_mac/Konos Sampler.vst3"
+          codesign --force --deep --sign - "dist_mac/Konos Sampler.component"
+          codesign --force --deep --sign - "dist_mac/Konos Sampler.app"
+
+          cat << 'EOF' > "dist_mac/Install_On_Mac_M1.command"
+          #!/bin/bash
+          DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+          echo "Installing Konos Sampler (VST3 & AU) for MacBook M1..."
+          mkdir -p "$HOME/Library/Audio/Plug-Ins/VST3"
+          mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+          cp -R "$DIR/Konos Sampler.vst3" "$HOME/Library/Audio/Plug-Ins/VST3/"
+          cp -R "$DIR/Konos Sampler.component" "$HOME/Library/Audio/Plug-Ins/Components/"
+          xattr -cr "$HOME/Library/Audio/Plug-Ins/VST3/Konos Sampler.vst3"
+          xattr -cr "$HOME/Library/Audio/Plug-Ins/Components/Konos Sampler.component"
+          xattr -cr "$DIR/Konos Sampler.app"
+          echo "Done! Installed VST3 and Audio Unit (AU) into ~/Library/Audio/Plug-Ins/."
+          echo "Restart your DAW (Logic Pro, GarageBand, Ableton, FL Studio, Reaper) to load Konos Sampler!"
+          read -p "Press Enter to close..."
+          EOF
+          chmod +x "dist_mac/Install_On_Mac_M1.command"
+
+      - name: Upload Ready-to-Use MacBook M1 VST3, AU & Standalone App
+        uses: actions/upload-artifact@v4
+        with:
+          name: Konos-Sampler-MacBook-M1-VST3-AU-Standalone
+          path: dist_mac/
